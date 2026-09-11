@@ -1,0 +1,457 @@
+{
+  "name": "Phishing Triage Pipeline (sanitised showcase)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "REPLACE_WITH_WEBHOOK_PATH",
+        "responseMode": "responseNode"
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "b2c07060-904f-4db3-8195-c2ff9f0de852",
+      "name": "Webhook - Ticket Created"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the webhook actually came from the ticketing system\n// by checking an HMAC signature over the raw request body.\n\nconst crypto = require('crypto');\nconst SECRET = 'REPLACE_WITH_WEBHOOK_SECRET';\n\nconst rawBody = $input.first().json.rawBody || '';\nconst receivedSig = $input.first().json.headers['x-webhook-signature'] || '';\n\nconst expectedSig = crypto.createHmac('sha256', SECRET).update(rawBody).digest('hex');\n\nif (expectedSig !== receivedSig) {\n  throw new Error('Webhook signature mismatch \u2014 rejecting request');\n}\n\nreturn $input.all();\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "8937196c-9e92-4754-9491-b7543a6277d6",
+      "name": "Verify Webhook Signature"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalise the ticketing system's payload shape into a\n// consistent set of fields the rest of the workflow expects.\n\nconst body = $input.first().json.body;\n\nreturn [{\n  json: {\n    ticketId: body.ticket?.id,\n    ticketKey: body.ticket?.key,\n    workTypeId: body.ticket?.workTypeId,\n    title: body.ticket?.title,\n    reporter: body.ticket?.reporter?.email\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "id": "42adc591-ac32-4dce-adef-f68e58511311",
+      "name": "Normalise Fields"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.workTypeId }}",
+              "rightValue": "REPLACE_WITH_PHISHING_REPORT_WORK_TYPE_ID",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ],
+      "id": "ed6c0afd-eff7-40e6-af01-9bd426434b8b",
+      "name": "If Is Phishing Report"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://REPLACE_WITH_TICKETING_HOST/api/tickets/{{ $json.ticketId }}/comments",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"body\": \"Report received \u2014 triage in progress.\" } }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        -80
+      ],
+      "id": "ce1cd186-79ba-4210-8c3b-03608eb75f13",
+      "name": "Comment - Received",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_TICKETING_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://REPLACE_WITH_TICKETING_HOST/api/tickets/{{ $json.ticketId }}/attachments",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -80
+      ],
+      "id": "95c1d26e-c2f7-4d0d-8a74-65b28146f766",
+      "name": "List Ticket Attachments",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_TICKETING_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.attachments[0].downloadUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        -80
+      ],
+      "id": "bbb5e55c-5910-4cfe-9f74-2cbf3b098dcb",
+      "name": "Download .eml Attachment",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_TICKETING_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract candidate IOCs (URLs, IPs, sender domain) from the\n// raw .eml, then drop anything on the internal allow-list\n// before it's scanned.\n\nconst ALLOWLIST_DOMAINS = ['REPLACE_WITH_OWN_DOMAIN.com', 'REPLACE_WITH_KNOWN_VENDOR.com'];\n\nconst raw = $input.first().binary?.data?.toString?.('utf8') || '';\n\nconst urlRegex = /https?:\\/\\/[^\\s\"'<>]+/gi;\nconst found = [...new Set(raw.match(urlRegex) || [])];\n\nconst candidates = found.filter(url => {\n  return !ALLOWLIST_DOMAINS.some(domain => url.includes(domain));\n});\n\nreturn candidates.map(url => ({ json: { url } }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -80
+      ],
+      "id": "1723f653-0fca-49a8-8e45-7dd82a24a90d",
+      "name": "Extract IOCs"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://urlscan.io/api/v1/scan/",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"url\": $json.url, \"visibility\": \"private\" } }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -80
+      ],
+      "id": "8f13789b-dc3b-4a92-8dd2-c1a98c8adfc0",
+      "name": "Submit to urlscan.io",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_URLSCAN_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify the scan verdict into malicious / suspicious / clean\n// based on the scanning API's returned score.\n\nconst score = $input.first().json.verdicts?.overall?.score ?? 0;\n\nlet verdict = 'clean';\nif (score >= 70) verdict = 'malicious';\nelse if (score >= 30) verdict = 'suspicious';\n\nreturn [{ json: { ...$input.first().json, verdict, score } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        -80
+      ],
+      "id": "005e4df0-f8e5-435c-bddc-a0e7d346d080",
+      "name": "Classify Verdict"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.verdict }}",
+              "rightValue": "clean",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        -80
+      ],
+      "id": "2b822663-39de-4462-8103-d6b6dc39dab9",
+      "name": "If Malicious Or Suspicious"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "={{ '\ud83d\udea8 Confirmed phishing \u2014 URL: ' + $json.url + ' | Verdict: ' + $json.verdict + ' | Score: ' + $json.score }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        2420,
+        -160
+      ],
+      "id": "ccca7d4e-b9a5-4485-825a-13d276dae62a",
+      "name": "Slack - Confirmed Threat Alert",
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_SLACK_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://REPLACE_WITH_MISP_HOST/events/addAttribute/REPLACE_WITH_EVENT_ID",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"type\": \"url\", \"value\": $json.url, \"category\": \"Network activity\" } }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        0
+      ],
+      "id": "7ffc949e-569e-4159-9ce2-4897cfd8918c",
+      "name": "Log IOC to Threat Intel Platform",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_MISP_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://REPLACE_WITH_TICKETING_HOST/api/tickets/{{ $('Normalise Fields').item.json.ticketId }}/comments",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"body\": \"No threat found \u2014 closing ticket.\" } }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        160
+      ],
+      "id": "e516d235-ad29-4476-9cb5-9287dd4f7aa5",
+      "name": "Close Ticket - No Threat",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_TICKETING_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### Phishing Triage Pipeline (sanitised)\n\nWebhook-triggered (HMAC-verified) \u2192 pulls raw .eml from the ticket \u2192 extracts + allow-list-filters IOCs \u2192 scans via urlscan.io \u2192 classifies verdict \u2192 confirmed threats go to Slack + threat-intel platform, clean reports auto-close.",
+        "height": 200,
+        "width": 320
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -260
+      ],
+      "id": "f17be474-d40b-487a-9c97-2d7a3be99044",
+      "name": "Sticky Note"
+    }
+  ],
+  "connections": {
+    "Webhook - Ticket Created": {
+      "main": [
+        [
+          {
+            "node": "Verify Webhook Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Webhook Signature": {
+      "main": [
+        [
+          {
+            "node": "Normalise Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Fields": {
+      "main": [
+        [
+          {
+            "node": "If Is Phishing Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Is Phishing Report": {
+      "main": [
+        [
+          {
+            "node": "Comment - Received",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comment - Received": {
+      "main": [
+        [
+          {
+            "node": "List Ticket Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Ticket Attachments": {
+      "main": [
+        [
+          {
+            "node": "Download .eml Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download .eml Attachment": {
+      "main": [
+        [
+          {
+            "node": "Extract IOCs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract IOCs": {
+      "main": [
+        [
+          {
+            "node": "Submit to urlscan.io",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit to urlscan.io": {
+      "main": [
+        [
+          {
+            "node": "Classify Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Verdict": {
+      "main": [
+        [
+          {
+            "node": "If Malicious Or Suspicious",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Malicious Or Suspicious": {
+      "main": [
+        [
+          {
+            "node": "Slack - Confirmed Threat Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log IOC to Threat Intel Platform",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Close Ticket - No Threat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,369 @@
+{
+  "name": "Vulnerability Advisory to Ticket Pipeline (sanitised showcase)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "1cc5266c-b203-48a0-ae2d-ce4506e72f3a",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.example-vuln-platform.com/advisories",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "severity",
+              "value": "HIGH,CRITICAL"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        -140
+      ],
+      "id": "432f9f61-7553-48e6-a5c6-da74e71a64f5",
+      "name": "Fetch Vulnerability Advisories",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_VULN_PLATFORM_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Given this raw vulnerability advisory text, extract and return ONLY valid JSON with fields: affected_asset, cve, severity, recommended_fix, reference_id.\n\nAdvisory:\n{{ $json.rawText }}"
+      },
+      "type": "n8n-nodes-base.agent",
+      "typeVersion": 1.7,
+      "position": [
+        440,
+        -140
+      ],
+      "id": "eb3ddbcf-aac0-41f6-9524-16e2296ad3a5",
+      "name": "Structure via LLM Agent (Advisories)",
+      "credentials": {
+        "REPLACE_WITH_LLM_CRED_TYPE": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_LLM_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "compare": "selectedFields",
+        "fieldsToCompare": {
+          "values": [
+            {
+              "fieldToCompare": "cve"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -140
+      ],
+      "id": "97c8fa8a-492b-4e90-89cb-d5264b39fdfe",
+      "name": "Deduplicate (Advisories)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten every advisory from this run into one plain object,\n// used to build a single aggregated ticket description.\n\nconst items = $input.all().map(i => i.json);\n\nconst description = items.map(i =>\n  `\u2022 [${i.severity}] ${i.affected_asset} \u2014 ${i.cve}\\n  Fix: ${i.recommended_fix}`\n).join('\\n\\n');\n\nreturn [{ json: { count: items.length, description } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -140
+      ],
+      "id": "bad4c6b9-3a4f-4e0f-8c56-bdb80ac21dd4",
+      "name": "Aggregate (Advisories)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://REPLACE_WITH_TICKETING_HOST/api/issue",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"fields\": {\n    \"project\": { \"key\": \"REPLACE_WITH_PROJECT_KEY\" },\n    \"issuetype\": { \"name\": \"REPLACE_WITH_ISSUE_TYPE\" },\n    \"summary\": `${$json.count} new HIGH/CRITICAL vulnerability advisories`,\n    \"description\": $json.description\n  }\n} }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -140
+      ],
+      "id": "5dfcea2a-d622-4238-a512-2880002c685e",
+      "name": "Create Ticket (Advisories)",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_TICKETING_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.example-vuln-platform.com/threat-intel-items",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "published",
+              "value": "today"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        140
+      ],
+      "id": "0ee6c6e0-643a-4e99-8fc5-40d5beec6777",
+      "name": "Fetch Threat Intel Items",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_VULN_PLATFORM_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Given this raw threat intel item text, extract and return ONLY valid JSON with fields: title, summary, related_actors, reference_id, status.\n\nItem:\n{{ $json.rawText }}"
+      },
+      "type": "n8n-nodes-base.agent",
+      "typeVersion": 1.7,
+      "position": [
+        440,
+        140
+      ],
+      "id": "c2b7312d-027f-4795-a50f-a99873aa1985",
+      "name": "Structure via LLM Agent (Threat Intel)",
+      "credentials": {
+        "REPLACE_WITH_LLM_CRED_TYPE": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_LLM_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "compare": "selectedFields",
+        "fieldsToCompare": {
+          "values": [
+            {
+              "fieldToCompare": "reference_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        660,
+        140
+      ],
+      "id": "7cc9dec9-7580-4729-8a3e-f276769f3e5f",
+      "name": "Deduplicate (Threat Intel)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\n\nconst description = items.map(i =>\n  `\u2022 ${i.title} (${i.reference_id}) \u2014 ${i.summary}`\n).join('\\n\\n');\n\nreturn [{ json: { count: items.length, description } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        140
+      ],
+      "id": "b0df0993-18ad-4e60-9655-f80e3ef85847",
+      "name": "Aggregate (Threat Intel)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://REPLACE_WITH_TICKETING_HOST/api/issue",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"fields\": {\n    \"project\": { \"key\": \"REPLACE_WITH_PROJECT_KEY\" },\n    \"issuetype\": { \"name\": \"REPLACE_WITH_ISSUE_TYPE\" },\n    \"summary\": `${$json.count} new threat intel items today`,\n    \"description\": $json.description\n  }\n} }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        140
+      ],
+      "id": "56959489-93f1-4d00-afc0-0e7fb2e4cd00",
+      "name": "Create Ticket (Threat Intel)",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_TICKETING_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### Vulnerability Advisory \u2192 Ticket Pipeline (sanitised)\n\nTwo parallel branches (advisories, threat-intel items) \u2192 LLM-structured JSON \u2192 dedup vs prior runs \u2192 aggregate every finding from this run into ONE ticket per branch.",
+        "height": 200,
+        "width": 320
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -380
+      ],
+      "id": "03904b89-7a90-4fb1-9f43-106f4dac7cc9",
+      "name": "Sticky Note"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Vulnerability Advisories",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Threat Intel Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Vulnerability Advisories": {
+      "main": [
+        [
+          {
+            "node": "Structure via LLM Agent (Advisories)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structure via LLM Agent (Advisories)": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate (Advisories)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate (Advisories)": {
+      "main": [
+        [
+          {
+            "node": "Aggregate (Advisories)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate (Advisories)": {
+      "main": [
+        [
+          {
+            "node": "Create Ticket (Advisories)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Threat Intel Items": {
+      "main": [
+        [
+          {
+            "node": "Structure via LLM Agent (Threat Intel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structure via LLM Agent (Threat Intel)": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate (Threat Intel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate (Threat Intel)": {
+      "main": [
+        [
+          {
+            "node": "Aggregate (Threat Intel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate (Threat Intel)": {
+      "main": [
+        [
+          {
+            "node": "Create Ticket (Threat Intel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

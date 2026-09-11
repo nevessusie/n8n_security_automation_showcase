@@ -1,0 +1,293 @@
+{
+  "name": "Attack Surface Monitor (sanitised showcase)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "b8fd473e-a992-4f94-80b2-03e8b549e340",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine every monitored domain into a single comma-separated\n// query string instead of looping per-domain (1 API call/run\n// instead of N calls/run).\nconst DOMAINS = [\n  'REPLACE_WITH_DOMAIN_1.com',\n  'REPLACE_WITH_DOMAIN_2.com',\n  'REPLACE_WITH_DOMAIN_3.com'\n];\n\nreturn [{ json: { query: `hostname:${DOMAINS.join(',')}` } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "23b95c75-350e-4797-aa08-5e9614dd061f",
+      "name": "Build Domain List"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.example-exposure-scanner.com/host/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.query }}"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "id": "382941c6-e595-4bbf-872b-b5fcfca4066e",
+      "name": "Exposure Scan API Call",
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten the raw scan results into one item per host:port finding,\n// then keep only findings that are actually actionable:\n//   - a known admin/database port, OR\n//   - the scanner has flagged a CVE against the service\n// Everything else is dropped as noise.\n\nconst ADMIN_DB_PORTS = new Set([22, 3389, 445, 3306, 5432, 6379, 9200, 9300, 27017, 27018, 1433, 21, 23]);\n\nconst matches = $input.first().json.matches || [];\nconst findings = [];\n\nfor (const host of matches) {\n  const hasCve = Array.isArray(host.vulns) && host.vulns.length > 0;\n  const isAdminDbPort = ADMIN_DB_PORTS.has(host.port);\n  if (!hasCve && !isAdminDbPort) continue;\n\n  findings.push({\n    json: {\n      ip: host.ip_str,\n      port: host.port,\n      product: host.product || 'unknown',\n      cves: host.vulns || [],\n      reason: hasCve ? 'cve_flagged' : 'admin_db_port'\n    }\n  });\n}\n\nreturn findings;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "id": "eab401f5-2489-4b46-b935-c11d4c1c20b5",
+      "name": "Flatten + Filter"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://REPLACE_WITH_TICKETING_HOST/api/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "jql",
+              "value": "=project = REPLACE_WITH_PROJECT_KEY AND status != Closed AND text ~ \"{{ $json.ip }}:{{ $json.port }}\""
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "id": "64e90486-7088-4608-ae8b-2120a7779050",
+      "name": "Search Open Tickets",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_TICKETING_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.total }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ],
+      "id": "c7e0c4c6-e221-4a51-a33f-8772c6398861",
+      "name": "If No Open Ticket Exists"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://REPLACE_WITH_TICKETING_HOST/api/issue",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"fields\": {\n    \"project\": { \"key\": \"REPLACE_WITH_PROJECT_KEY\" },\n    \"issuetype\": { \"name\": \"REPLACE_WITH_ISSUE_TYPE\" },\n    \"summary\": `Exposed service: ${$json.ip}:${$json.port} (${$json.product})`,\n    \"description\": `Reason: ${$json.reason}\\nCVEs: ${JSON.stringify($json.cves)}`\n  }\n} }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        -60
+      ],
+      "id": "8f42ed94-0527-4c23-9752-d018298cf631",
+      "name": "Create Ticket",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_TICKETING_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "={{ '\ud83c\udf10 New exposed service ticket created: ' + $json.ip + ':' + $json.port + ' (' + $json.product + ')' }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1540,
+        -60
+      ],
+      "id": "cf3b3da0-797a-4b91-928f-4afebeee0d7c",
+      "name": "Slack Digest Notification",
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "REPLACE_WITH_SLACK_CRED_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### Attack Surface Monitor (sanitised)\n\nCombined single-query exposure scan \u2192 severity filter (admin/db port OR CVE flagged) \u2192 dedup against open tickets \u2192 create ticket \u2192 Slack digest.\n\nA separate scheduled reconciliation workflow (not shown) re-checks every open ticket created here and auto-closes it once the underlying exposure is gone.",
+        "height": 220,
+        "width": 320
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -260
+      ],
+      "id": "8a7dce17-33fb-4ef3-9a10-0e8c92482cae",
+      "name": "Sticky Note"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Domain List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Domain List": {
+      "main": [
+        [
+          {
+            "node": "Exposure Scan API Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exposure Scan API Call": {
+      "main": [
+        [
+          {
+            "node": "Flatten + Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten + Filter": {
+      "main": [
+        [
+          {
+            "node": "Search Open Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Open Tickets": {
+      "main": [
+        [
+          {
+            "node": "If No Open Ticket Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If No Open Ticket Exists": {
+      "main": [
+        [
+          {
+            "node": "Create Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Ticket": {
+      "main": [
+        [
+          {
+            "node": "Slack Digest Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
